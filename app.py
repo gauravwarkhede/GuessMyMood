@@ -1,24 +1,29 @@
+import av
+import cv2
+import numpy as np
 import streamlit as st
 import tensorflow as tf
-import numpy as np
-import cv2
-from PIL import Image
+
+from collections import deque
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 
 # ============================================================
-# PAGE CONFIG
+# PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
     page_title="Guess My Mood",
-    page_icon="😊",
-    layout="centered"
+    page_icon="🧠",
+    layout="wide"
 )
 
 
 # ============================================================
-# EMOTIONS
+# SETTINGS
 # ============================================================
+
+MODEL_PATH = "mood_model.keras"
 
 EMOTIONS = [
     "Angry",
@@ -30,6 +35,10 @@ EMOTIONS = [
     "Neutral"
 ]
 
+SMOOTHING_FRAMES = 10
+
+CONFIDENCE_THRESHOLD = 35.0
+
 
 # ============================================================
 # LOAD MODEL
@@ -39,11 +48,8 @@ EMOTIONS = [
 def load_model():
 
     return tf.keras.models.load_model(
-        "mood_model.keras"
+        MODEL_PATH
     )
-
-
-model = load_model()
 
 
 # ============================================================
@@ -53,333 +59,710 @@ model = load_model()
 @st.cache_resource
 def load_face_detector():
 
-    cascade_path = cv2.data.haarcascades + (
-        "haarcascade_frontalface_default.xml"
-    )
-
     detector = cv2.CascadeClassifier(
-        cascade_path
+        cv2.data.haarcascades
+        + "haarcascade_frontalface_default.xml"
     )
 
     return detector
 
 
+model = load_model()
+
 face_detector = load_face_detector()
 
 
 # ============================================================
-# TITLE
+# HEADER
 # ============================================================
 
 st.title("🧠 Guess My Mood")
 
-st.write(
-    "Take a picture and let the AI guess your emotion!"
-)
+st.markdown(
+    """
+    ### Facial Emotion Recognition
 
-st.info(
-    "💡 Look directly at the camera with your face clearly visible."
-)
-
-
-# ============================================================
-# CAMERA
-# ============================================================
-
-camera_image = st.camera_input(
-    "📷 Take a picture"
+    Our CNN model analyzes facial expressions and predicts
+    one of seven emotions.
+    """
 )
 
 
+st.divider()
+
+
 # ============================================================
-# PROCESS IMAGE
+# SIDEBAR
 # ============================================================
 
-if camera_image is not None:
+st.sidebar.title("⚙️ Settings")
 
-    # --------------------------------------------------------
-    # Read uploaded camera image
-    # --------------------------------------------------------
+mode = st.sidebar.radio(
+    "Choose detection mode:",
+    [
+        "📸 Snapshot",
+        "📹 Live Detection"
+    ]
+)
 
-    image = Image.open(
-        camera_image
-    ).convert("RGB")
 
-    image_np = np.array(
-        image
+st.sidebar.markdown("---")
+
+st.sidebar.write(
+    "**Emotions:**"
+)
+
+for emotion in EMOTIONS:
+
+    st.sidebar.write(
+        f"• {emotion}"
+    )
+
+
+st.sidebar.markdown("---")
+
+st.sidebar.info(
+    "Model: CNN\n\n"
+    "Input: 48 × 48 grayscale\n\n"
+    "Smoothing: 10 frames"
+)
+
+
+# ============================================================
+# SNAPSHOT MODE
+# ============================================================
+
+if mode == "📸 Snapshot":
+
+    st.header("📸 Snapshot Mode")
+
+    st.write(
+        "Take a picture and let the CNN predict your mood."
+    )
+
+
+    camera_image = st.camera_input(
+        "Take a picture"
+    )
+
+
+    if camera_image is not None:
+
+        # ----------------------------------------------------
+        # Convert uploaded image
+        # ----------------------------------------------------
+
+        file_bytes = np.asarray(
+            bytearray(camera_image.read()),
+            dtype=np.uint8
+        )
+
+
+        frame = cv2.imdecode(
+            file_bytes,
+            cv2.IMREAD_COLOR
+        )
+
+
+        if frame is None:
+
+            st.error(
+                "Could not read the image."
+            )
+
+        else:
+
+            # ------------------------------------------------
+            # Convert to grayscale
+            # ------------------------------------------------
+
+            gray = cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2GRAY
+            )
+
+
+            # ------------------------------------------------
+            # Detect faces
+            # ------------------------------------------------
+
+            faces = face_detector.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(80, 80)
+            )
+
+
+            if len(faces) == 0:
+
+                st.warning(
+                    "😕 No face detected. "
+                    "Please try again with your face clearly visible."
+                )
+
+                st.image(
+                    frame,
+                    channels="BGR",
+                    use_container_width=True
+                )
+
+
+            else:
+
+                # --------------------------------------------
+                # Process first detected face
+                # --------------------------------------------
+
+                x, y, w, h = faces[0]
+
+
+                face = gray[
+                    y:y + h,
+                    x:x + w
+                ]
+
+
+                # --------------------------------------------
+                # Resize
+                # --------------------------------------------
+
+                face = cv2.resize(
+                    face,
+                    (48, 48),
+                    interpolation=cv2.INTER_AREA
+                )
+
+
+                # --------------------------------------------
+                # Normalize
+                # --------------------------------------------
+
+                face = (
+                    face.astype("float32")
+                    / 255.0
+                )
+
+
+                # --------------------------------------------
+                # Reshape
+                # --------------------------------------------
+
+                face = face.reshape(
+                    1,
+                    48,
+                    48,
+                    1
+                )
+
+
+                # --------------------------------------------
+                # Predict
+                # --------------------------------------------
+
+                predictions = model.predict(
+                    face,
+                    verbose=0
+                )[0]
+
+
+                predicted_index = np.argmax(
+                    predictions
+                )
+
+
+                emotion = EMOTIONS[
+                    predicted_index
+                ]
+
+
+                confidence = (
+                    predictions[predicted_index]
+                    * 100
+                )
+
+
+                # --------------------------------------------
+                # Draw face
+                # --------------------------------------------
+
+                result_frame = frame.copy()
+
+
+                cv2.rectangle(
+                    result_frame,
+                    (x, y),
+                    (x + w, y + h),
+                    (0, 255, 0),
+                    3
+                )
+
+
+                cv2.putText(
+                    result_frame,
+                    f"{emotion} {confidence:.1f}%",
+                    (x, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9,
+                    (0, 255, 0),
+                    2
+                )
+
+
+                # --------------------------------------------
+                # Display image
+                # --------------------------------------------
+
+                st.image(
+                    result_frame,
+                    channels="BGR",
+                    use_container_width=True
+                )
+
+
+                # --------------------------------------------
+                # Result
+                # --------------------------------------------
+
+                st.subheader(
+                    "🎯 Prediction"
+                )
+
+
+                if confidence >= CONFIDENCE_THRESHOLD:
+
+                    st.success(
+                        f"Your mood appears to be: "
+                        f"**{emotion}**"
+                    )
+
+                else:
+
+                    st.warning(
+                        f"The model is not very confident. "
+                        f"Prediction: **{emotion}**"
+                    )
+
+
+                st.write(
+                    f"Confidence: **{confidence:.2f}%**"
+                )
+
+
+                # --------------------------------------------
+                # Probability chart
+                # --------------------------------------------
+
+                st.subheader(
+                    "📊 Emotion Probabilities"
+                )
+
+
+                probability_data = {
+
+                    EMOTIONS[i]:
+                    float(predictions[i] * 100)
+
+                    for i in range(
+                        len(EMOTIONS)
+                    )
+
+                }
+
+
+                st.bar_chart(
+                    probability_data
+                )
+
+
+# ============================================================
+# LIVE DETECTION MODE
+# ============================================================
+
+else:
+
+    st.header("📹 Live Detection")
+
+    st.write(
+        "Allow camera access and click **START** "
+        "to begin real-time emotion detection."
     )
 
 
     # --------------------------------------------------------
-    # Convert to grayscale for face detection
+    # SESSION STATE FOR PREDICTION HISTORY
     # --------------------------------------------------------
 
-    gray = cv2.cvtColor(
-        image_np,
-        cv2.COLOR_RGB2GRAY
-    )
+    if "prediction_history" not in st.session_state:
+
+        st.session_state.prediction_history = deque(
+            maxlen=SMOOTHING_FRAMES
+        )
 
 
     # --------------------------------------------------------
-    # Detect faces
+    # VIDEO CALLBACK
     # --------------------------------------------------------
 
-    faces = face_detector.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(50, 50)
-    )
-
-
-    # ========================================================
-    # NO FACE FOUND
-    # ========================================================
-
-    if len(faces) == 0:
-
-        st.warning(
-            "😕 I couldn't detect a face."
-        )
-
-        st.write(
-            "Try moving closer to the camera, "
-            "improving the lighting, and looking "
-            "directly at the camera."
-        )
-
-
-    # ========================================================
-    # FACE FOUND
-    # ========================================================
-
-    else:
+    def video_frame_callback(
+        frame: av.VideoFrame
+    ) -> av.VideoFrame:
 
         # ----------------------------------------------------
-        # Select largest detected face
+        # Convert frame to OpenCV image
         # ----------------------------------------------------
 
-        x, y, w, h = max(
-            faces,
-            key=lambda face: face[2] * face[3]
+        image = frame.to_ndarray(
+            format="bgr24"
         )
 
 
         # ----------------------------------------------------
-        # Add small padding around face
+        # Flip camera horizontally
         # ----------------------------------------------------
 
-        padding = int(
-            0.15 * max(w, h)
-        )
-
-        x1 = max(
-            0,
-            x - padding
-        )
-
-        y1 = max(
-            0,
-            y - padding
-        )
-
-        x2 = min(
-            image_np.shape[1],
-            x + w + padding
-        )
-
-        y2 = min(
-            image_np.shape[0],
-            y + h + padding
-        )
-
-
-        # ----------------------------------------------------
-        # Crop face
-        # ----------------------------------------------------
-
-        face = image_np[
-            y1:y2,
-            x1:x2
-        ]
-
-
-        # ----------------------------------------------------
-        # Show detected face
-        # ----------------------------------------------------
-
-        st.subheader(
-            "👤 Face detected!"
-        )
-
-        st.image(
-            face,
-            caption="Face used by the AI",
-            width=250
-        )
-
-
-        # ----------------------------------------------------
-        # Convert face to grayscale
-        # ----------------------------------------------------
-
-        face_gray = cv2.cvtColor(
-            face,
-            cv2.COLOR_RGB2GRAY
-        )
-
-
-        # ----------------------------------------------------
-        # Resize to training size
-        # ----------------------------------------------------
-
-        face_resized = cv2.resize(
-            face_gray,
-            (48, 48),
-            interpolation=cv2.INTER_AREA
-        )
-
-
-        # ----------------------------------------------------
-        # Normalize
-        # ----------------------------------------------------
-
-        face_normalized = (
-            face_resized.astype(
-                "float32"
-            ) / 255.0
-        )
-
-
-        # ----------------------------------------------------
-        # Add CNN dimensions
-        # ----------------------------------------------------
-
-        model_input = face_normalized.reshape(
-            1,
-            48,
-            48,
+        image = cv2.flip(
+            image,
             1
         )
 
 
-        # ====================================================
-        # PREDICTION
-        # ====================================================
+        # ----------------------------------------------------
+        # Convert to grayscale
+        # ----------------------------------------------------
 
-        predictions = model.predict(
-            model_input,
-            verbose=0
-        )[0]
-
-
-        predicted_index = np.argmax(
-            predictions
-        )
-
-        predicted_emotion = EMOTIONS[
-            predicted_index
-        ]
-
-        confidence = (
-            predictions[predicted_index]
-            * 100
+        gray = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2GRAY
         )
 
 
-        # ====================================================
-        # RESULT
-        # ====================================================
+        # ----------------------------------------------------
+        # Detect faces
+        # ----------------------------------------------------
 
-        st.divider()
-
-        st.subheader(
-            "🎯 My Guess"
+        faces = face_detector.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(80, 80)
         )
 
 
-        # Different messages for different emotions
+        # ----------------------------------------------------
+        # Process faces
+        # ----------------------------------------------------
 
-        messages = {
+        for (x, y, w, h) in faces:
 
-            "Angry":
-                "😡 You look a little angry!",
+            # ----------------------------------------------
+            # Crop face
+            # ----------------------------------------------
 
-            "Disgust":
-                "🤢 Something doesn't look right!",
-
-            "Fear":
-                "😨 You look a little scared!",
-
-            "Happy":
-                "😄 You look happy!",
-
-            "Sad":
-                "😢 You look a little sad.",
-
-            "Surprise":
-                "😲 You look surprised!",
-
-            "Neutral":
-                "😐 You look pretty neutral."
-
-        }
-
-
-        st.success(
-            messages[predicted_emotion]
-        )
-
-
-        st.metric(
-            "Predicted Emotion",
-            predicted_emotion
-        )
-
-
-        st.metric(
-            "Confidence",
-            f"{confidence:.1f}%"
-        )
-
-
-        # ====================================================
-        # ALL PROBABILITIES
-        # ====================================================
-
-        st.subheader(
-            "📊 Emotion probabilities"
-        )
-
-
-        # Sort highest → lowest
-
-        sorted_indices = np.argsort(
-            predictions
-        )[::-1]
-
-
-        for index in sorted_indices:
-
-            emotion = EMOTIONS[
-                index
+            face = gray[
+                y:y + h,
+                x:x + w
             ]
 
-            probability = (
-                float(
-                    predictions[index]
+
+            # ----------------------------------------------
+            # Resize
+            # ----------------------------------------------
+
+            face = cv2.resize(
+                face,
+                (48, 48),
+                interpolation=cv2.INTER_AREA
+            )
+
+
+            # ----------------------------------------------
+            # Normalize
+            # ----------------------------------------------
+
+            face = (
+                face.astype("float32")
+                / 255.0
+            )
+
+
+            # ----------------------------------------------
+            # Reshape
+            # ----------------------------------------------
+
+            face = face.reshape(
+                1,
+                48,
+                48,
+                1
+            )
+
+
+            # ----------------------------------------------
+            # Prediction
+            # ----------------------------------------------
+
+            predictions = model.predict(
+                face,
+                verbose=0
+            )[0]
+
+
+            # ----------------------------------------------
+            # Add prediction to smoothing history
+            # ----------------------------------------------
+
+            # NOTE:
+            # A local deque is used here because the callback
+            # runs in another thread.
+
+            if not hasattr(
+                video_frame_callback,
+                "history"
+            ):
+
+                video_frame_callback.history = deque(
+                    maxlen=SMOOTHING_FRAMES
                 )
+
+
+            video_frame_callback.history.append(
+                predictions
             )
 
-            percentage = (
-                probability * 100
+
+            # ----------------------------------------------
+            # Average recent predictions
+            # ----------------------------------------------
+
+            average_predictions = np.mean(
+                video_frame_callback.history,
+                axis=0
             )
 
-            st.write(
-                f"**{emotion}** — "
-                f"{percentage:.1f}%"
+
+            # ----------------------------------------------
+            # Get final prediction
+            # ----------------------------------------------
+
+            predicted_index = np.argmax(
+                average_predictions
             )
 
-            st.progress(
-                probability
+
+            emotion = EMOTIONS[
+                predicted_index
+            ]
+
+
+            confidence = (
+                average_predictions[
+                    predicted_index
+                ] * 100
             )
+
+
+            # ----------------------------------------------
+            # Face rectangle
+            # ----------------------------------------------
+
+            cv2.rectangle(
+                image,
+                (x, y),
+                (x + w, y + h),
+                (0, 255, 0),
+                3
+            )
+
+
+            # ----------------------------------------------
+            # Main emotion label
+            # ----------------------------------------------
+
+            if confidence >= CONFIDENCE_THRESHOLD:
+
+                label = (
+                    f"{emotion} "
+                    f"{confidence:.1f}%"
+                )
+
+            else:
+
+                label = (
+                    f"Not sure "
+                    f"{confidence:.1f}%"
+                )
+
+
+            # ----------------------------------------------
+            # Draw label
+            # ----------------------------------------------
+
+            cv2.putText(
+                image,
+                label,
+                (x, max(y - 15, 30)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0),
+                2
+            )
+
+
+            # ----------------------------------------------
+            # Top 3 emotions
+            # ----------------------------------------------
+
+            top_indices = np.argsort(
+                average_predictions
+            )[::-1][:3]
+
+
+            text_y = y + h + 30
+
+
+            for rank, index in enumerate(
+                top_indices
+            ):
+
+                emotion_name = EMOTIONS[
+                    index
+                ]
+
+
+                probability = (
+                    average_predictions[index]
+                    * 100
+                )
+
+
+                text = (
+                    f"{emotion_name}: "
+                    f"{probability:.1f}%"
+                )
+
+
+                cv2.putText(
+                    image,
+                    text,
+                    (
+                        x,
+                        text_y + rank * 25
+                    ),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (255, 255, 255),
+                    2
+                )
+
+
+        # ----------------------------------------------------
+        # No face detected
+        # ----------------------------------------------------
+
+        if len(faces) == 0:
+
+            cv2.putText(
+                image,
+                "No face detected",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 165, 255),
+                2
+            )
+
+
+        # ----------------------------------------------------
+        # Application title
+        # ----------------------------------------------------
+
+        cv2.putText(
+            image,
+            "Guess My Mood",
+            (
+                20,
+                image.shape[0] - 45
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2
+        )
+
+
+        # ----------------------------------------------------
+        # Return processed frame
+        # ----------------------------------------------------
+
+        return av.VideoFrame.from_ndarray(
+            image,
+            format="bgr24"
+        )
+
+
+    # --------------------------------------------------------
+    # START WEBRTC
+    # --------------------------------------------------------
+
+    webrtc_ctx = webrtc_streamer(
+
+        key="guess-my-mood-live",
+
+        mode=WebRtcMode.SENDRECV,
+
+        video_frame_callback=video_frame_callback,
+
+        media_stream_constraints={
+            "video": True,
+            "audio": False
+        },
+
+        async_processing=True,
+
+        rtc_configuration={
+            "iceServers": [
+                {
+                    "urls": [
+                        "stun:stun.l.google.com:19302"
+                    ]
+                }
+            ]
+        }
+    )
+
+
+    # --------------------------------------------------------
+    # INSTRUCTIONS
+    # --------------------------------------------------------
+
+    st.info(
+        """
+        **How to use Live Detection**
+
+        1. Click **START**
+        2. Allow browser camera access
+        3. Keep your face clearly visible
+        4. Try different facial expressions
+        5. Click **STOP** when finished
+
+        The prediction is smoothed across multiple frames
+        to reduce rapid changes.
+        """
+    )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "🧠 Guess My Mood | CNN Facial Emotion Recognition"
+)
+
+st.caption(
+    "⚠️ This project is for educational/demo purposes. "
+    "Emotion predictions are not guaranteed to be accurate."
+)

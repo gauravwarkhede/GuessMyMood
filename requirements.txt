@@ -1,5 +1,11 @@
-streamlit
-tensorflow==2.20.0
+tensorflow
 numpy
-pillow
-opencv-python-headless==4.10.0.84
+pandas
+opencv-python-headless
+streamlit
+streamlit-webrtc
+av
+scikit-learn
+matplotlib
+seaborn
+Pillow
