@@ -5,6 +5,13 @@ An AI-powered facial emotion recognition application that uses a Convolutional N
 The application allows users to take a picture using their webcam and predicts their facial emotion using a trained deep learning model.
 
 ---
+# 🧠 Guess My Mood
+
+## 🚀 Live Demo
+
+👉 **[Try Guess My Mood](https://guessmymood-kbwsf8aqkuvgvzypjgwfwy.streamlit.app/)**
+
+An AI-powered facial emotion recognition application that uses a Convolutional Neural Network (CNN) to predict emotions from facial expressions.
 
 ## 🎯 Project Overview
 
