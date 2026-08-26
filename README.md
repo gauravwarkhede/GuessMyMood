@@ -11,7 +11,16 @@ The application allows users to take a picture using their webcam and predicts t
 
 👉 **[Try Guess My Mood](https://guessmymood-kbwsf8aqkuvgvzypjgwfwy.streamlit.app/)**
 
-An AI-powered facial emotion recognition application that uses a Convolutional Neural Network (CNN) to predict emotions from facial expressions.
+### 📹 Features
+
+- 📸 Snapshot emotion detection
+- 📹 Real-time webcam emotion detection
+- 👤 Face detection using OpenCV
+- 🧠 CNN-based emotion classification
+- 📊 Emotion confidence scores
+- 🔄 Prediction smoothing for live detection
+
+An AI-powered facial emotion recognition application that predicts facial expressions using a CNN.
 
 ## 🎯 Project Overview
 
